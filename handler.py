@@ -68,8 +68,8 @@ def _convert_data(data):
 
 def _patched_from_numpy(ndarray):
     """Wrapper for torch.from_numpy that handles type mismatch errors."""
-    # Ensure contiguous C-order array
-    if hasattr(ndarray, 'flags') and not ndarray.flags.get('C_CONTIGUOUS', True):
+    # Ensure contiguous C-order array (flags uses bracket access, not .get())
+    if hasattr(ndarray, 'flags') and not ndarray.flags['C_CONTIGUOUS']:
         ndarray = np.ascontiguousarray(ndarray)
     try:
         return _original_from_numpy(ndarray)

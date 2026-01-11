@@ -91,12 +91,15 @@ COPY requirements_inference.txt /tmp/requirements_inference.txt
 RUN echo "=== STAGE 4: Full Python dependencies ===" && \
     pip install --no-cache-dir --ignore-installed -r /tmp/requirements_inference.txt
 
-# FIX: Re-pin numpy IMMEDIATELY after requirements install
-# Some packages may have upgraded numpy to 2.x which causes recursion errors
-RUN pip install --no-cache-dir --force-reinstall numpy==1.26.4
+# FIX: Completely uninstall and reinstall numpy to avoid recursion errors
+# The recursion happens due to corrupted internal state when numpy is upgraded/downgraded
+# in-place. A clean reinstall fixes this.
+RUN pip uninstall -y numpy && \
+    pip cache purge && \
+    pip install --no-cache-dir numpy==1.26.4
 
-# Verify numpy version BEFORE any other imports
-RUN python -c "import numpy; v=numpy.__version__; print(f'numpy {v}'); assert v.startswith('1.26'), f'Wrong numpy: {v}'"
+# Verify numpy works correctly with a simple operation
+RUN python -c "import numpy as np; print(f'numpy {np.__version__}'); a = np.array([1,2,3]); print(f'Test array: {a}')"
 
 RUN echo "=== VERIFY: Key packages ===" && \
     python -c "import transformers; print(f'transformers {transformers.__version__}')" && \
