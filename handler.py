@@ -37,25 +37,39 @@ import numpy as np
 # =============================================================================
 # FIX: Monkey-patch torch functions to handle numpy compatibility issues
 #
-# Two separate issues can occur with certain PyTorch/NumPy version combinations:
+# Issues with certain PyTorch/NumPy version combinations:
 # 1. "expected np.ndarray (got numpy.ndarray)" - in torch.from_numpy()
 # 2. "Could not infer dtype of numpy.int64" - in torch.tensor() with numpy scalars
+# 3. Same issues can occur in torch.as_tensor()
 #
-# These patches handle both cases by converting numpy types to Python natives.
+# These patches handle all cases by converting numpy types to Python natives.
 # =============================================================================
 
-def _convert_numpy_scalars(data):
-    """Convert numpy scalar types to Python native types."""
-    if isinstance(data, (np.integer, np.floating)):
+def _convert_numpy_to_python(data):
+    """Convert numpy types to Python native types recursively."""
+    if isinstance(data, np.ndarray):
+        # Convert array to list of Python types, then back to tensor-compatible format
+        return data.tolist()
+    elif isinstance(data, (np.integer, np.floating, np.bool_)):
         return data.item()
-    elif isinstance(data, np.ndarray):
-        return data
     elif isinstance(data, (list, tuple)):
-        return type(data)(_convert_numpy_scalars(x) for x in data)
+        return type(data)(_convert_numpy_to_python(x) for x in data)
     return data
 
 _original_from_numpy = torch.from_numpy
 _original_tensor = torch.tensor
+_original_as_tensor = torch.as_tensor
+
+def _patched_tensor(data, *args, **kwargs):
+    """Wrapper for torch.tensor that handles numpy type errors."""
+    try:
+        return _original_tensor(data, *args, **kwargs)
+    except (TypeError, RuntimeError) as e:
+        error_msg = str(e)
+        if "Could not infer dtype" in error_msg or "expected np.ndarray" in error_msg:
+            converted_data = _convert_numpy_to_python(data)
+            return _original_tensor(converted_data, *args, **kwargs)
+        raise
 
 def _patched_from_numpy(ndarray):
     """Wrapper for torch.from_numpy that handles type mismatch errors."""
@@ -64,27 +78,27 @@ def _patched_from_numpy(ndarray):
     except TypeError as e:
         error_msg = str(e)
         if "expected np.ndarray" in error_msg or "Could not infer dtype" in error_msg:
-            # Fallback: convert to contiguous array and use torch.tensor()
+            # Use patched tensor (not original!) to handle any dtype issues
             if hasattr(ndarray, 'copy'):
                 ndarray = np.ascontiguousarray(ndarray)
-            return _original_tensor(ndarray)
+            return _patched_tensor(ndarray)
         raise
 
-def _patched_tensor(data, *args, **kwargs):
-    """Wrapper for torch.tensor that handles numpy scalar type errors."""
+def _patched_as_tensor(data, *args, **kwargs):
+    """Wrapper for torch.as_tensor that handles numpy type errors."""
     try:
-        return _original_tensor(data, *args, **kwargs)
+        return _original_as_tensor(data, *args, **kwargs)
     except (TypeError, RuntimeError) as e:
         error_msg = str(e)
-        if "Could not infer dtype" in error_msg:
-            # Convert numpy scalars to Python native types
-            converted_data = _convert_numpy_scalars(data)
-            return _original_tensor(converted_data, *args, **kwargs)
+        if "Could not infer dtype" in error_msg or "expected np.ndarray" in error_msg:
+            converted_data = _convert_numpy_to_python(data)
+            return _original_as_tensor(converted_data, *args, **kwargs)
         raise
 
 torch.from_numpy = _patched_from_numpy
 torch.tensor = _patched_tensor
-print("Applied torch.from_numpy and torch.tensor monkey-patches for numpy compatibility")
+torch.as_tensor = _patched_as_tensor
+print("Applied numpy compatibility patches for torch.from_numpy, tensor, and as_tensor")
 # =============================================================================
 
 
