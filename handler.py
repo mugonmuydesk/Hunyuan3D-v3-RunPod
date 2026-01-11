@@ -40,60 +40,54 @@ import numpy as np
 # Issues with certain PyTorch/NumPy version combinations:
 # 1. "expected np.ndarray (got numpy.ndarray)" - in torch.from_numpy()
 # 2. "Could not infer dtype of numpy.int64" - in torch.tensor() with numpy scalars
-# 3. Same issues can occur in torch.as_tensor()
 #
-# These patches handle all cases by converting numpy types to Python natives.
+# Strategy: Proactively convert numpy scalars BEFORE calling torch functions.
+# This avoids exception-based fallbacks that can cause recursion issues.
 # =============================================================================
-
-def _convert_numpy_to_python(data):
-    """Convert numpy types to Python native types recursively."""
-    if isinstance(data, np.ndarray):
-        # Convert array to list of Python types, then back to tensor-compatible format
-        return data.tolist()
-    elif isinstance(data, (np.integer, np.floating, np.bool_)):
-        return data.item()
-    elif isinstance(data, (list, tuple)):
-        return type(data)(_convert_numpy_to_python(x) for x in data)
-    return data
 
 _original_from_numpy = torch.from_numpy
 _original_tensor = torch.tensor
 _original_as_tensor = torch.as_tensor
 
-def _patched_tensor(data, *args, **kwargs):
-    """Wrapper for torch.tensor that handles numpy type errors."""
-    try:
-        return _original_tensor(data, *args, **kwargs)
-    except (TypeError, RuntimeError) as e:
-        error_msg = str(e)
-        if "Could not infer dtype" in error_msg or "expected np.ndarray" in error_msg:
-            converted_data = _convert_numpy_to_python(data)
-            return _original_tensor(converted_data, *args, **kwargs)
-        raise
+def _convert_numpy_scalar(val):
+    """Convert numpy scalar to Python native type."""
+    if isinstance(val, (np.integer, np.floating, np.bool_)):
+        return val.item()
+    return val
+
+def _convert_data(data):
+    """Convert numpy types in data to Python natives (non-recursive for arrays)."""
+    if isinstance(data, np.ndarray):
+        return data  # Arrays are fine, just scalars are problematic
+    elif isinstance(data, (np.integer, np.floating, np.bool_)):
+        return data.item()
+    elif isinstance(data, (list, tuple)):
+        # Only convert scalars in lists, don't recurse deeply
+        return type(data)(_convert_numpy_scalar(x) for x in data)
+    return data
 
 def _patched_from_numpy(ndarray):
     """Wrapper for torch.from_numpy that handles type mismatch errors."""
+    # Ensure contiguous C-order array
+    if hasattr(ndarray, 'flags') and not ndarray.flags.get('C_CONTIGUOUS', True):
+        ndarray = np.ascontiguousarray(ndarray)
     try:
         return _original_from_numpy(ndarray)
     except TypeError as e:
-        error_msg = str(e)
-        if "expected np.ndarray" in error_msg or "Could not infer dtype" in error_msg:
-            # Use patched tensor (not original!) to handle any dtype issues
-            if hasattr(ndarray, 'copy'):
-                ndarray = np.ascontiguousarray(ndarray)
-            return _patched_tensor(ndarray)
+        if "expected np.ndarray" in str(e):
+            # Last resort: convert to list and use tensor
+            return _original_tensor(ndarray.tolist())
         raise
 
+def _patched_tensor(data, *args, **kwargs):
+    """Wrapper for torch.tensor that pre-converts numpy scalars."""
+    converted = _convert_data(data)
+    return _original_tensor(converted, *args, **kwargs)
+
 def _patched_as_tensor(data, *args, **kwargs):
-    """Wrapper for torch.as_tensor that handles numpy type errors."""
-    try:
-        return _original_as_tensor(data, *args, **kwargs)
-    except (TypeError, RuntimeError) as e:
-        error_msg = str(e)
-        if "Could not infer dtype" in error_msg or "expected np.ndarray" in error_msg:
-            converted_data = _convert_numpy_to_python(data)
-            return _original_as_tensor(converted_data, *args, **kwargs)
-        raise
+    """Wrapper for torch.as_tensor that pre-converts numpy scalars."""
+    converted = _convert_data(data)
+    return _original_as_tensor(converted, *args, **kwargs)
 
 torch.from_numpy = _patched_from_numpy
 torch.tensor = _patched_tensor
