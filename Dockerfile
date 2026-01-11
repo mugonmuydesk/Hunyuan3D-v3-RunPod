@@ -161,12 +161,14 @@ RUN chmod +x compile_mesh_painter.sh && \
 RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('mesh_inpaint_processor: OK')"
 
 # =============================================================================
-# STAGE 7: RunPod SDK
+# STAGE 7: RunPod SDK and HuggingFace Hub
 # =============================================================================
-RUN pip install --no-cache-dir runpod huggingface_hub[cli]
+# Include hf_xet for faster downloads via Xet Storage protocol
+RUN pip install --no-cache-dir runpod "huggingface_hub[cli,hf_xet]"
 
-# VERIFY: RunPod SDK
+# VERIFY: RunPod SDK and hf_xet
 RUN python -c "import runpod; print(f'runpod {runpod.__version__}')"
+RUN python -c "import hf_xet; print('hf_xet: OK')" || echo "hf_xet not available (optional)"
 
 # =============================================================================
 # STAGE 8: Download model weights (large but faster cold starts)
