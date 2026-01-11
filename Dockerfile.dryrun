@@ -159,16 +159,17 @@ RUN echo "=== STAGE 8: SKIPPED model download (dry run) ===" && \
     echo "DRY RUN - models not downloaded" > /models/Hunyuan3D-2.1/DRY_RUN.txt
 
 # =============================================================================
-# STAGE 9: Handler verification
+# STAGE 9: Handler and mock testing
 # =============================================================================
 WORKDIR /app
 COPY handler.py /app/handler.py
+COPY test_handler_mock.py /app/test_handler_mock.py
 
 RUN echo "=== STAGE 9: Handler verification ===" && \
     python -m py_compile /app/handler.py && \
     echo "PASS: handler.py syntax OK"
 
-# VERIFY imports
+# VERIFY imports (basic)
 RUN python -c "\
 import sys; \
 sys.path.insert(0, '/app'); \
@@ -195,6 +196,16 @@ sys.path.insert(0, '/app'); \
 sys.path.insert(0, '/app/hy3dpaint'); \
 from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig; \
 print('PASS: Paint pipeline import')" || echo "WARN: Paint pipeline import skipped (needs full deps)"
+
+# =============================================================================
+# STAGE 10: Comprehensive mock tests (catches deep runtime issues)
+# =============================================================================
+# This runs the test suite with MINIMAL_DEPS=true which treats pipeline import
+# failures as warnings (expected with minimal CI requirements).
+# For full validation, use Dockerfile.dryrun-full instead.
+RUN echo "=== STAGE 10: Comprehensive mock tests (minimal deps mode) ===" && \
+    MINIMAL_DEPS=true python /app/test_handler_mock.py 2>&1 || \
+    (echo "FAIL: Mock tests failed - check output above" && exit 1)
 
 # =============================================================================
 # FINAL SUMMARY
