@@ -168,9 +168,14 @@ RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('mes
 # Include hf_xet for faster downloads via Xet Storage protocol
 RUN pip install --no-cache-dir runpod "huggingface_hub[cli,hf_xet]"
 
-# VERIFY: RunPod SDK and hf_xet
+# FIX: Re-pin numpy to 1.26.4 (runpod may have upgraded to numpy 2.x which breaks Hunyuan3D)
+# Hunyuan3D uses numpy.core.multiarray.generic which was removed in numpy 2.0
+RUN pip install --no-cache-dir numpy==1.26.4
+
+# VERIFY: RunPod SDK, hf_xet, and numpy version
 RUN python -c "import runpod; print(f'runpod {runpod.__version__}')"
 RUN python -c "import hf_xet; print('hf_xet: OK')" || echo "hf_xet not available (optional)"
+RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'ERROR: numpy 2.x detected: {numpy.__version__}'; print(f'numpy {numpy.__version__}: OK')"
 
 # =============================================================================
 # STAGE 8: Download model weights (large but faster cold starts)

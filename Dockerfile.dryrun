@@ -143,9 +143,13 @@ RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('PAS
 RUN echo "=== STAGE 7: RunPod SDK ===" && \
     pip install --no-cache-dir runpod "huggingface_hub[cli,hf_xet]"
 
+# FIX: Re-pin numpy to 1.26.4 (runpod may upgrade to numpy 2.x which breaks Hunyuan3D)
+RUN pip install --no-cache-dir numpy==1.26.4
+
 # VERIFY
 RUN python -c "import runpod; print(f'PASS: runpod {runpod.__version__}')"
 RUN python -c "import hf_xet; print('PASS: hf_xet')" || echo "WARN: hf_xet not available"
+RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'FAIL: numpy 2.x'; print(f'PASS: numpy {numpy.__version__}')"
 
 # =============================================================================
 # STAGE 8: SKIP model download (dry run)
