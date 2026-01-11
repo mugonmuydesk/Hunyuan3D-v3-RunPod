@@ -147,13 +147,18 @@ RUN pip install --no-cache-dir /tmp/custom_rasterizer-0.1-cp312-cp312-linux_x86_
 RUN python -c "import custom_rasterizer; print('custom_rasterizer: OK')"
 
 # =============================================================================
-# STAGE 6: Optional mesh_inpaint_processor (pure C++, no CUDA)
+# STAGE 6: mesh_inpaint_processor (pybind11 C++ extension)
 # =============================================================================
+# This is a pybind11 C++ extension that needs to be compiled with g++
+# The compile script uses: c++ -O3 -Wall -shared -std=c++11 -fPIC $(python -m pybind11 --includes) ...
 WORKDIR /app/hy3dpaint/DifferentiableRenderer
-RUN pip install --no-cache-dir -e . 2>&1 || echo "WARN: mesh_inpaint_processor build failed (optional)"
+RUN chmod +x compile_mesh_painter.sh && \
+    ./compile_mesh_painter.sh && \
+    ls -la mesh_inpaint_processor*.so && \
+    echo "mesh_inpaint_processor compiled successfully"
 
-# Check if it installed (optional, so don't fail)
-RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('mesh_inpaint_processor: OK')" || echo "mesh_inpaint_processor: NOT INSTALLED (optional)"
+# VERIFY: mesh_inpaint_processor can be imported
+RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('mesh_inpaint_processor: OK')"
 
 # =============================================================================
 # STAGE 7: RunPod SDK
