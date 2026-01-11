@@ -91,6 +91,13 @@ COPY requirements_inference.txt /tmp/requirements_inference.txt
 RUN echo "=== STAGE 4: Full Python dependencies ===" && \
     pip install --no-cache-dir --ignore-installed -r /tmp/requirements_inference.txt
 
+# FIX: Re-pin numpy IMMEDIATELY after requirements install
+# Some packages may have upgraded numpy to 2.x which causes recursion errors
+RUN pip install --no-cache-dir --force-reinstall numpy==1.26.4
+
+# Verify numpy version BEFORE any other imports
+RUN python -c "import numpy; v=numpy.__version__; print(f'numpy {v}'); assert v.startswith('1.26'), f'Wrong numpy: {v}'"
+
 RUN echo "=== VERIFY: Key packages ===" && \
     python -c "import transformers; print(f'transformers {transformers.__version__}')" && \
     python -c "import diffusers; print(f'diffusers {diffusers.__version__}')" && \
@@ -117,13 +124,15 @@ RUN chmod +x compile_mesh_painter.sh && ./compile_mesh_painter.sh
 RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('mesh_inpaint_processor: OK')"
 
 # =============================================================================
-# STAGE 7: RunPod SDK and numpy fix
+# STAGE 7: RunPod SDK
 # =============================================================================
 RUN pip install --no-cache-dir runpod "huggingface_hub[cli,hf_xet]"
+
+# FIX: Re-pin numpy again after runpod install (it may upgrade numpy)
 RUN pip install --no-cache-dir numpy==1.26.4
 
 RUN python -c "import runpod; print(f'runpod {runpod.__version__}')"
-RUN python -c "import numpy; assert numpy.__version__.startswith('1.'), f'numpy 2.x detected'; print(f'numpy {numpy.__version__}')"
+RUN python -c "import numpy; assert numpy.__version__.startswith('1.26'), f'numpy wrong: {numpy.__version__}'"
 
 # =============================================================================
 # STAGE 8: SKIP model download (the key time saver)
@@ -140,11 +149,13 @@ COPY handler.py /app/handler.py
 COPY test_handler_mock.py /app/test_handler_mock.py
 
 # Copy patches (same as main Dockerfile)
-COPY schedulers.py /app/hy3dshape/hy3dshape/schedulers.py 2>/dev/null || true
-COPY mesh_utils_noblender.py /app/hy3dpaint/DifferentiableRenderer/mesh_utils.py 2>/dev/null || true
-COPY bpy_mesh_ops.py /app/bpy_mesh_ops.py 2>/dev/null || true
-COPY onnx_upscaler.py /app/onnx_upscaler.py 2>/dev/null || true
-COPY patches/image_super_utils.py /app/hy3dpaint/utils/image_super_utils.py 2>/dev/null || true
+COPY schedulers.py /app/hy3dshape/hy3dshape/schedulers.py
+COPY mesh_utils_noblender.py /app/hy3dpaint/DifferentiableRenderer/mesh_utils.py
+COPY bpy_mesh_ops.py /app/bpy_mesh_ops.py
+COPY onnx_upscaler.py /app/onnx_upscaler.py
+COPY patches/image_super_utils.py /app/hy3dpaint/utils/image_super_utils.py
+
+RUN echo "Patches applied"
 
 RUN python -m py_compile /app/handler.py && echo "handler.py: syntax OK"
 
