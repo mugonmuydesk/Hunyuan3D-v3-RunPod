@@ -1,7 +1,7 @@
 """
 RunPod Serverless Handler for Hunyuan3D-2.1 (Image-to-3D)
 
-Version: 1.1.0 - Fixed serverless entry point
+Version: 1.2.0 - Extended numpy compatibility fixes
 
 Generates high-fidelity 3D models with PBR materials from input images.
 
@@ -35,24 +35,56 @@ import torch
 import numpy as np
 
 # =============================================================================
-# FIX: Monkey-patch torch.from_numpy to handle numpy type mismatch
-# Error: "expected np.ndarray (got numpy.ndarray)" occurs with certain
-# PyTorch/NumPy version combinations. This wrapper uses torch.tensor() instead.
+# FIX: Monkey-patch torch functions to handle numpy compatibility issues
+#
+# Two separate issues can occur with certain PyTorch/NumPy version combinations:
+# 1. "expected np.ndarray (got numpy.ndarray)" - in torch.from_numpy()
+# 2. "Could not infer dtype of numpy.int64" - in torch.tensor() with numpy scalars
+#
+# These patches handle both cases by converting numpy types to Python natives.
 # =============================================================================
+
+def _convert_numpy_scalars(data):
+    """Convert numpy scalar types to Python native types."""
+    if isinstance(data, (np.integer, np.floating)):
+        return data.item()
+    elif isinstance(data, np.ndarray):
+        return data
+    elif isinstance(data, (list, tuple)):
+        return type(data)(_convert_numpy_scalars(x) for x in data)
+    return data
+
 _original_from_numpy = torch.from_numpy
+_original_tensor = torch.tensor
 
 def _patched_from_numpy(ndarray):
     """Wrapper for torch.from_numpy that handles type mismatch errors."""
     try:
         return _original_from_numpy(ndarray)
     except TypeError as e:
-        if "expected np.ndarray" in str(e):
-            # Fallback: use torch.tensor() which doesn't have this issue
-            return torch.tensor(ndarray)
+        error_msg = str(e)
+        if "expected np.ndarray" in error_msg or "Could not infer dtype" in error_msg:
+            # Fallback: convert to contiguous array and use torch.tensor()
+            if hasattr(ndarray, 'copy'):
+                ndarray = np.ascontiguousarray(ndarray)
+            return _original_tensor(ndarray)
+        raise
+
+def _patched_tensor(data, *args, **kwargs):
+    """Wrapper for torch.tensor that handles numpy scalar type errors."""
+    try:
+        return _original_tensor(data, *args, **kwargs)
+    except (TypeError, RuntimeError) as e:
+        error_msg = str(e)
+        if "Could not infer dtype" in error_msg:
+            # Convert numpy scalars to Python native types
+            converted_data = _convert_numpy_scalars(data)
+            return _original_tensor(converted_data, *args, **kwargs)
         raise
 
 torch.from_numpy = _patched_from_numpy
-print("Applied torch.from_numpy monkey-patch for numpy compatibility")
+torch.tensor = _patched_tensor
+print("Applied torch.from_numpy and torch.tensor monkey-patches for numpy compatibility")
 # =============================================================================
 
 
