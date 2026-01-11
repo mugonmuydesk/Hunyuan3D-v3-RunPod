@@ -124,21 +124,27 @@ RUN echo "=== VERIFY: custom_rasterizer ===" && \
     python -c "import custom_rasterizer; print('PASS: custom_rasterizer imported')"
 
 # =============================================================================
-# STAGE 6: mesh_inpaint_processor (optional)
+# STAGE 6: mesh_inpaint_processor (pybind11 C++ extension)
 # =============================================================================
 WORKDIR /app/hy3dpaint/DifferentiableRenderer
-RUN echo "=== STAGE 6: mesh_inpaint_processor (optional) ===" && \
-    (pip install --no-cache-dir -e . 2>&1 && echo "PASS: mesh_inpaint_processor built") || \
-    echo "WARN: mesh_inpaint_processor failed (optional, continuing)"
+RUN echo "=== STAGE 6: mesh_inpaint_processor ===" && \
+    chmod +x compile_mesh_painter.sh && \
+    ./compile_mesh_painter.sh && \
+    ls -la mesh_inpaint_processor*.so && \
+    echo "PASS: mesh_inpaint_processor compiled"
+
+# VERIFY
+RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('PASS: mesh_inpaint_processor')"
 
 # =============================================================================
-# STAGE 7: RunPod SDK
+# STAGE 7: RunPod SDK and HuggingFace Hub
 # =============================================================================
 RUN echo "=== STAGE 7: RunPod SDK ===" && \
-    pip install --no-cache-dir runpod huggingface_hub[cli]
+    pip install --no-cache-dir runpod "huggingface_hub[cli,hf_xet]"
 
 # VERIFY
 RUN python -c "import runpod; print(f'PASS: runpod {runpod.__version__}')"
+RUN python -c "import hf_xet; print('PASS: hf_xet')" || echo "WARN: hf_xet not available"
 
 # =============================================================================
 # STAGE 8: SKIP model download (dry run)
