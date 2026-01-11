@@ -32,6 +32,28 @@ sys.path.insert(0, '/app/hy3dpaint')
 
 import runpod
 import torch
+import numpy as np
+
+# =============================================================================
+# FIX: Monkey-patch torch.from_numpy to handle numpy type mismatch
+# Error: "expected np.ndarray (got numpy.ndarray)" occurs with certain
+# PyTorch/NumPy version combinations. This wrapper uses torch.tensor() instead.
+# =============================================================================
+_original_from_numpy = torch.from_numpy
+
+def _patched_from_numpy(ndarray):
+    """Wrapper for torch.from_numpy that handles type mismatch errors."""
+    try:
+        return _original_from_numpy(ndarray)
+    except TypeError as e:
+        if "expected np.ndarray" in str(e):
+            # Fallback: use torch.tensor() which doesn't have this issue
+            return torch.tensor(ndarray)
+        raise
+
+torch.from_numpy = _patched_from_numpy
+print("Applied torch.from_numpy monkey-patch for numpy compatibility")
+# =============================================================================
 
 
 # Global pipelines (loaded once on cold start)
