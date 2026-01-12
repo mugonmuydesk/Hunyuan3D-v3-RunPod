@@ -1,7 +1,7 @@
 """
 RunPod Serverless Handler for Hunyuan3D-2.1 (Image-to-3D)
 
-Version: 1.4.0 - Added VRAM optimization toggles
+Version: 1.5.0 - Fixed texture generation (paint pipeline returns path, not Trimesh)
 
 Generates high-fidelity 3D models with PBR materials from input images.
 
@@ -40,6 +40,7 @@ sys.path.insert(0, '/app/hy3dpaint')
 import runpod
 import torch
 import numpy as np
+import trimesh
 
 # =============================================================================
 # FIX: Monkey-patch torch functions to handle numpy compatibility issues
@@ -300,8 +301,13 @@ def handler(job: dict) -> dict:
                 # Update paint pipeline config
                 paint_pipe.config.max_num_view = num_views
                 paint_pipe.config.resolution = texture_resolution
-                mesh = paint_pipe(str(untextured_mesh_path), image_path=str(image_path))
-                print("Texture generation complete.")
+
+                # Paint pipeline returns file path string, not Trimesh object
+                output_mesh_path = paint_pipe(str(untextured_mesh_path), image_path=str(image_path))
+                print(f"Texture generation complete: {output_mesh_path}")
+
+                # Load the textured mesh from the output path
+                mesh = trimesh.load(output_mesh_path)
                 if should_clear_cache():
                     torch.cuda.empty_cache()
             except Exception as e:
