@@ -266,8 +266,15 @@ print('Paint pipeline import: OK')" || echo "WARN: Paint pipeline import failed 
 # =============================================================================
 ENV HF_HOME=/models
 ENV HUGGINGFACE_HUB_CACHE=/models
-ENV MAX_NUM_VIEW=6
-ENV TEXTURE_RESOLUTION=512
+
+# Texture generation settings (defaults for lower VRAM usage)
+ENV MAX_NUM_VIEW=3
+ENV TEXTURE_RESOLUTION=128
+
+# VRAM Optimization toggles (OFF by default for max speed on high-VRAM GPUs like RunPod)
+# Set to "1" to enable when running on lower-VRAM GPUs
+ENV ENABLE_CPU_OFFLOAD=0
+ENV ENABLE_CACHE_CLEARING=0
 
 WORKDIR /app
 CMD ["python", "-u", "handler.py"]

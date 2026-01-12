@@ -1,7 +1,7 @@
 """
 RunPod Serverless Handler for Hunyuan3D-2.1 (Image-to-3D)
 
-Version: 1.3.0 - Fixed recursion in numpy compatibility patches
+Version: 1.4.0 - Added VRAM optimization toggles
 
 Generates high-fidelity 3D models with PBR materials from input images.
 
@@ -10,12 +10,18 @@ API:
     - image_base64: Base64 encoded input image (required)
     - generate_texture: Whether to generate PBR textures (default: true)
     - output_format: 'glb' or 'obj' (default: 'glb')
-    - num_views: Number of views for texture (default: 6)
-    - texture_resolution: Texture resolution (default: 512)
+    - num_views: Number of views for texture (default: from MAX_NUM_VIEW env)
+    - texture_resolution: Texture resolution (default: from TEXTURE_RESOLUTION env)
 
   Output:
     - model: Base64 encoded 3D model
     - format: Output format used
+
+Environment Variables (VRAM Optimization):
+  - MAX_NUM_VIEW: Max texture views (default: 3, lower = less VRAM)
+  - TEXTURE_RESOLUTION: Texture resolution in pixels (default: 128)
+  - ENABLE_CPU_OFFLOAD: Set to "1" to move models to CPU when idle (default: 0)
+  - ENABLE_CACHE_CLEARING: Set to "1" to clear CUDA cache after each step (default: 0)
 """
 
 import os
@@ -119,6 +125,19 @@ shape_pipeline = None
 paint_pipeline = None
 
 
+# =============================================================================
+# VRAM Optimization toggles (all OFF by default for max speed on high-VRAM GPUs)
+# =============================================================================
+def should_enable_cpu_offload():
+    """Check if CPU offload should be enabled (trades speed for VRAM)."""
+    return os.environ.get('ENABLE_CPU_OFFLOAD', '0').lower() in ['1', 'true', 'yes']
+
+
+def should_clear_cache():
+    """Check if CUDA cache should be cleared after each generation."""
+    return os.environ.get('ENABLE_CACHE_CLEARING', '0').lower() in ['1', 'true', 'yes']
+
+
 def get_device():
     """Get the best available device."""
     if torch.cuda.is_available():
@@ -161,6 +180,22 @@ def load_pipelines():
             print(f"Error loading paint pipeline: {e}")
             traceback.print_exc()
             raise
+
+    # Apply CPU offload if enabled (trades speed for VRAM)
+    if should_enable_cpu_offload():
+        print("VRAM optimization: Enabling CPU offload for pipelines...")
+        try:
+            if shape_pipeline is not None:
+                shape_pipeline.enable_model_cpu_offload()
+                print("  - Shape pipeline: CPU offload enabled")
+        except Exception as e:
+            print(f"  - Shape pipeline: CPU offload failed ({e})")
+        try:
+            if paint_pipeline is not None:
+                paint_pipeline.enable_model_cpu_offload()
+                print("  - Paint pipeline: CPU offload enabled")
+        except Exception as e:
+            print(f"  - Paint pipeline: CPU offload failed ({e})")
 
     return shape_pipeline, paint_pipeline
 
@@ -243,7 +278,11 @@ def handler(job: dict) -> dict:
             print("Generating 3D shape from image...")
             mesh = shape_pipe(image=str(image_path))[0]
             print("Shape generation complete.")
+            if should_clear_cache():
+                torch.cuda.empty_cache()
         except Exception as e:
+            if should_clear_cache():
+                torch.cuda.empty_cache()
             traceback.print_exc()
             return {"error": f"Shape generation failed: {str(e)}"}
 
@@ -257,7 +296,11 @@ def handler(job: dict) -> dict:
                 paint_pipe.config.resolution = texture_resolution
                 mesh = paint_pipe(mesh, image_path=str(image_path))
                 print("Texture generation complete.")
+                if should_clear_cache():
+                    torch.cuda.empty_cache()
             except Exception as e:
+                if should_clear_cache():
+                    torch.cuda.empty_cache()
                 traceback.print_exc()
                 return {"error": f"Texture generation failed: {str(e)}"}
 
