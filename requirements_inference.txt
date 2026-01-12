@@ -69,7 +69,8 @@ cupy-cuda12x==13.4.1
 # ONNX Runtime
 # Use onnxruntime-gpu for CUDA support (CUDAExecutionProvider)
 # This enables GPU acceleration for the ONNX-based RealESRGAN upscaler
-onnxruntime-gpu==1.17.0
+# NOTE: 1.18.0+ required for CUDA 12 support (1.17.0 only supports CUDA 11)
+onnxruntime-gpu==1.19.2
 torchmetrics==1.6.0
 
 pydantic==2.10.6
