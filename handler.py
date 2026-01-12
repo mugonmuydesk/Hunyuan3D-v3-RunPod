@@ -291,10 +291,16 @@ def handler(job: dict) -> dict:
             try:
                 runpod.serverless.progress_update(job, f"Generating textures ({num_views} views)...")
                 print(f"Generating textures ({num_views} views, {texture_resolution}px)...")
+
+                # Save untextured mesh to temp file (paint pipeline expects OBJ path for remeshing)
+                untextured_mesh_path = temp_path / "untextured.obj"
+                mesh.export(str(untextured_mesh_path), file_type='obj')
+                print(f"Saved untextured mesh: {untextured_mesh_path}")
+
                 # Update paint pipeline config
                 paint_pipe.config.max_num_view = num_views
                 paint_pipe.config.resolution = texture_resolution
-                mesh = paint_pipe(mesh, image_path=str(image_path))
+                mesh = paint_pipe(str(untextured_mesh_path), image_path=str(image_path))
                 print("Texture generation complete.")
                 if should_clear_cache():
                     torch.cuda.empty_cache()
