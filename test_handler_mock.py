@@ -283,6 +283,43 @@ print("\n[PASS] Numpy API check complete")
 
 
 # =============================================================================
+# TEST 5: ONNX Runtime providers (catches CUDA library mismatches)
+# =============================================================================
+print("\n" + "=" * 60)
+print("TEST 5: ONNX Runtime providers")
+print("=" * 60)
+
+try:
+    import onnxruntime as ort
+    available_providers = ort.get_available_providers()
+    print(f"  Available providers: {available_providers}")
+
+    # Check if CUDA provider is available (expected in full build)
+    if 'CUDAExecutionProvider' in available_providers:
+        print("  [OK] CUDAExecutionProvider available")
+    else:
+        print("  [WARN] CUDAExecutionProvider not available (will use CPU)")
+
+    # Always have CPU fallback
+    if 'CPUExecutionProvider' in available_providers:
+        print("  [OK] CPUExecutionProvider available")
+    else:
+        print("  [FAIL] CPUExecutionProvider missing - ONNX won't work!")
+        sys.exit(1)
+
+    print("\n[PASS] ONNX Runtime check complete")
+except ImportError as e:
+    if MINIMAL_DEPS:
+        print(f"  [WARN] onnxruntime not installed (expected in minimal deps)")
+    else:
+        print(f"  [FAIL] onnxruntime import failed: {e}")
+        sys.exit(1)
+except Exception as e:
+    print(f"  [FAIL] ONNX Runtime error: {e}")
+    sys.exit(1)
+
+
+# =============================================================================
 # SUMMARY
 # =============================================================================
 print("\n" + "=" * 60)
@@ -294,6 +331,7 @@ This validates:
 - Numpy patches work without recursion
 - Handler logic is correct
 - Numpy 1.x APIs are available
+- ONNX Runtime providers are available
 
 What this does NOT test (requires real models):
 - Actual model loading (from_pretrained)
