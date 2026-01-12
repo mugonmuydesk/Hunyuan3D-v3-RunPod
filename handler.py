@@ -1,7 +1,7 @@
 """
 RunPod Serverless Handler for Hunyuan3D-2.1 (Image-to-3D)
 
-Version: 1.2.0 - Extended numpy compatibility fixes
+Version: 1.3.0 - Fixed recursion in numpy compatibility patches
 
 Generates high-fidelity 3D models with PBR materials from input images.
 
@@ -23,6 +23,7 @@ import sys
 import base64
 import tempfile
 import traceback
+import threading
 from pathlib import Path
 
 # Add Hunyuan3D paths
@@ -37,62 +38,79 @@ import numpy as np
 # =============================================================================
 # FIX: Monkey-patch torch functions to handle numpy compatibility issues
 #
-# Issues with certain PyTorch/NumPy version combinations:
+# Two separate issues can occur with certain PyTorch/NumPy version combinations:
 # 1. "expected np.ndarray (got numpy.ndarray)" - in torch.from_numpy()
 # 2. "Could not infer dtype of numpy.int64" - in torch.tensor() with numpy scalars
 #
-# Strategy: Proactively convert numpy scalars BEFORE calling torch functions.
-# This avoids exception-based fallbacks that can cause recursion issues.
+# These patches pre-convert numpy types to avoid the errors entirely.
+# Uses thread-local recursion guard to prevent infinite loops.
 # =============================================================================
+
+_patch_local = threading.local()
+
+def _convert_numpy_to_native(data):
+    """Convert numpy types to Python native types recursively."""
+    if isinstance(data, np.ndarray):
+        # Convert array to list of native types, then let torch handle it
+        return data.tolist()
+    elif isinstance(data, (np.integer,)):
+        return int(data)
+    elif isinstance(data, (np.floating,)):
+        return float(data)
+    elif isinstance(data, (np.bool_,)):
+        return bool(data)
+    elif isinstance(data, (list, tuple)):
+        converted = [_convert_numpy_to_native(x) for x in data]
+        return type(data)(converted)
+    return data
 
 _original_from_numpy = torch.from_numpy
 _original_tensor = torch.tensor
-_original_as_tensor = torch.as_tensor
-
-def _convert_numpy_scalar(val):
-    """Convert numpy scalar to Python native type."""
-    if isinstance(val, (np.integer, np.floating, np.bool_)):
-        return val.item()
-    return val
-
-def _convert_data(data):
-    """Convert numpy types in data to Python natives (non-recursive for arrays)."""
-    if isinstance(data, np.ndarray):
-        return data  # Arrays are fine, just scalars are problematic
-    elif isinstance(data, (np.integer, np.floating, np.bool_)):
-        return data.item()
-    elif isinstance(data, (list, tuple)):
-        # Only convert scalars in lists, don't recurse deeply
-        return type(data)(_convert_numpy_scalar(x) for x in data)
-    return data
 
 def _patched_from_numpy(ndarray):
     """Wrapper for torch.from_numpy that handles type mismatch errors."""
-    # Ensure contiguous C-order array (flags uses bracket access, not .get())
-    if hasattr(ndarray, 'flags') and not ndarray.flags['C_CONTIGUOUS']:
-        ndarray = np.ascontiguousarray(ndarray)
+    # Check recursion guard
+    if getattr(_patch_local, 'in_from_numpy', False):
+        return _original_from_numpy(ndarray)
+
+    _patch_local.in_from_numpy = True
     try:
         return _original_from_numpy(ndarray)
     except TypeError as e:
-        if "expected np.ndarray" in str(e):
-            # Last resort: convert to list and use tensor
-            return _original_tensor(ndarray.tolist())
+        error_msg = str(e)
+        if "expected np.ndarray" in error_msg or "Could not infer dtype" in error_msg:
+            # Fallback: ensure contiguous array
+            ndarray = np.ascontiguousarray(ndarray)
+            return _original_from_numpy(ndarray)
         raise
+    finally:
+        _patch_local.in_from_numpy = False
 
 def _patched_tensor(data, *args, **kwargs):
-    """Wrapper for torch.tensor that pre-converts numpy scalars."""
-    converted = _convert_data(data)
-    return _original_tensor(converted, *args, **kwargs)
+    """Wrapper for torch.tensor that handles numpy scalar type errors."""
+    # Check recursion guard
+    if getattr(_patch_local, 'in_tensor', False):
+        return _original_tensor(data, *args, **kwargs)
 
-def _patched_as_tensor(data, *args, **kwargs):
-    """Wrapper for torch.as_tensor that pre-converts numpy scalars."""
-    converted = _convert_data(data)
-    return _original_as_tensor(converted, *args, **kwargs)
+    _patch_local.in_tensor = True
+    try:
+        # Pre-convert numpy scalars to native Python types
+        if isinstance(data, (np.integer, np.floating, np.bool_)):
+            data = _convert_numpy_to_native(data)
+        return _original_tensor(data, *args, **kwargs)
+    except (TypeError, RuntimeError) as e:
+        error_msg = str(e)
+        if "Could not infer dtype" in error_msg:
+            # Full conversion as fallback
+            converted_data = _convert_numpy_to_native(data)
+            return _original_tensor(converted_data, *args, **kwargs)
+        raise
+    finally:
+        _patch_local.in_tensor = False
 
 torch.from_numpy = _patched_from_numpy
 torch.tensor = _patched_tensor
-torch.as_tensor = _patched_as_tensor
-print("Applied numpy compatibility patches for torch.from_numpy, tensor, and as_tensor")
+print("Applied torch.from_numpy and torch.tensor monkey-patches for numpy compatibility (v1.3)")
 # =============================================================================
 
 
