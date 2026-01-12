@@ -168,9 +168,13 @@ RUN python -c "from mesh_inpaint_processor import meshVerticeInpaint; print('mes
 # Include hf_xet for faster downloads via Xet Storage protocol
 RUN pip install --no-cache-dir runpod "huggingface_hub[cli,hf_xet]"
 
-# FIX: Re-pin numpy to 1.26.4 (runpod may have upgraded to numpy 2.x which breaks Hunyuan3D)
+# FIX: Completely uninstall and reinstall numpy to avoid recursion errors
+# The recursion happens due to corrupted internal state when numpy is upgraded/downgraded
+# in-place with --ignore-installed. A clean reinstall fixes this.
 # Hunyuan3D uses numpy.core.multiarray.generic which was removed in numpy 2.0
-RUN pip install --no-cache-dir numpy==1.26.4
+RUN pip uninstall -y numpy && \
+    pip cache purge && \
+    pip install --no-cache-dir numpy==1.26.4
 
 # VERIFY: RunPod SDK, hf_xet, and numpy version
 RUN python -c "import runpod; print(f'runpod {runpod.__version__}')"

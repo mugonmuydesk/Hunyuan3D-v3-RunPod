@@ -291,9 +291,17 @@ def handler(job: dict) -> dict:
 
 # Entry point
 if __name__ == "__main__":
-    # Local testing: python handler.py <image.png>
-    if len(sys.argv) > 1:
-        with open(sys.argv[1], "rb") as f:
+    # Check for RunPod flags (--rp_serve_api, --rp_log_level, etc.)
+    has_runpod_flags = any(arg.startswith("--rp_") for arg in sys.argv[1:])
+
+    # Local file test: first arg is a file path (no -- prefix, not a RunPod mode)
+    local_test_file = None
+    if not has_runpod_flags and len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
+        local_test_file = sys.argv[1]
+
+    if local_test_file:
+        # Local testing: python handler.py <image.png>
+        with open(local_test_file, "rb") as f:
             test_image = base64.b64encode(f.read()).decode("utf-8")
 
         test_job = {
@@ -312,5 +320,6 @@ if __name__ == "__main__":
                 f.write(base64.b64decode(result['model']))
             print("Saved to test_output.glb")
     else:
-        # Production: RunPod serverless mode
+        # Production/API mode: RunPod serverless
+        # Supports --rp_serve_api for local HTTP server
         runpod.serverless.start({"handler": handler})
