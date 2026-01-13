@@ -208,41 +208,53 @@ else:
 # Test 3c: Full handler with mocked pipelines
 print("\n  Testing full handler with mocks...")
 
-# Create a mock mesh
-mock_mesh = MagicMock()
-mock_mesh.export = MagicMock(side_effect=lambda path, **kwargs: Path(path).write_bytes(b'MOCK_GLB_DATA'))
+# Create a temporary directory for mock mesh files
+import trimesh
+with tempfile.TemporaryDirectory() as mock_dir:
+    mock_dir_path = Path(mock_dir)
 
-# Create mock pipelines
-mock_shape_pipeline = MagicMock()
-mock_shape_pipeline.return_value = [mock_mesh]
+    # Create a mock textured mesh file that paint_pipe will "return"
+    mock_textured_mesh_path = mock_dir_path / "textured_output.obj"
+    mock_box = trimesh.creation.box()
+    mock_box.export(str(mock_textured_mesh_path))
 
-mock_paint_config = MagicMock()
-mock_paint_pipeline = MagicMock()
-mock_paint_pipeline.return_value = mock_mesh
-mock_paint_pipeline.config = mock_paint_config
+    # Create a mock mesh for shape pipeline
+    mock_mesh = MagicMock()
+    mock_mesh.export = MagicMock(side_effect=lambda path, **kwargs: Path(path).write_bytes(b'MOCK_OBJ_DATA'))
 
-# Mock the load_pipelines function
-with patch.object(handler, 'load_pipelines', return_value=(mock_shape_pipeline, mock_paint_pipeline)):
-    # Disable progress updates (they need real runpod context)
-    with patch('runpod.serverless.progress_update'):
-        result = handler.handler({
-            "input": {
-                "image_base64": test_image,
-                "generate_texture": True,
-                "output_format": "glb"
-            }
-        })
+    # Create mock pipelines
+    mock_shape_pipeline = MagicMock()
+    mock_shape_pipeline.return_value = [mock_mesh]
 
-if "error" in result:
-    print(f"  [FAIL] Handler error: {result['error']}")
-    sys.exit(1)
-elif "model" in result:
-    # Decode and verify
-    decoded = base64.b64decode(result["model"])
-    print(f"  [OK] Handler returned {len(decoded)} bytes, format={result['format']}, textured={result['textured']}")
-else:
-    print(f"  [FAIL] Unexpected result: {result}")
-    sys.exit(1)
+    mock_paint_config = MagicMock()
+    mock_paint_pipeline = MagicMock()
+    # paint_pipe() returns a file path string, not a mesh object
+    mock_paint_pipeline.return_value = str(mock_textured_mesh_path)
+    mock_paint_pipeline.config = mock_paint_config
+
+    # Mock the load_pipelines function
+    with patch.object(handler, 'load_pipelines', return_value=(mock_shape_pipeline, mock_paint_pipeline)):
+        # Disable progress updates (they need real runpod context)
+        with patch('runpod.serverless.progress_update'):
+            result = handler.handler({
+                "input": {
+                    "image_base64": test_image,
+                    "generate_texture": True,
+                    "output_format": "glb"
+                }
+            })
+
+    # Check result (inside the with block so temp files still exist)
+    if "error" in result:
+        print(f"  [FAIL] Handler error: {result['error']}")
+        sys.exit(1)
+    elif "model" in result:
+        # Decode and verify
+        decoded = base64.b64decode(result["model"])
+        print(f"  [OK] Handler returned {len(decoded)} bytes, format={result['format']}, textured={result['textured']}")
+    else:
+        print(f"  [FAIL] Unexpected result: {result}")
+        sys.exit(1)
 
 print("\n[PASS] Handler logic OK")
 
