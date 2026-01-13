@@ -138,12 +138,12 @@ RUN python -c "import trimesh; print(f'trimesh {trimesh.__version__}')"
 RUN python -c "import torch; assert torch.__version__.startswith('2.5'), f'PyTorch was overwritten to {torch.__version__}'"
 
 # =============================================================================
-# STAGE 5: Custom rasterizer (build from source for all CUDA architectures)
+# STAGE 5: Custom rasterizer (pre-built wheel with all CUDA architectures)
 # =============================================================================
-# Build from source to ensure compatibility with all GPUs in TORCH_CUDA_ARCH_LIST
-# This takes ~5-10 minutes but ensures A40, L40, A100, H100 all work
-WORKDIR /app/hy3dpaint/custom_rasterizer
-RUN pip install --no-cache-dir -e .
+# Use pre-built wheel with kernels for: sm_70 (V100), sm_75 (T4), sm_80 (A100),
+# sm_86 (A40), sm_89 (L40), sm_90 (H100). Built locally with Dockerfile.wheel.
+COPY custom_rasterizer-0.1-cp312-cp312-linux_x86_64.whl /tmp/
+RUN pip install --no-cache-dir /tmp/custom_rasterizer-0.1-cp312-cp312-linux_x86_64.whl
 
 # VERIFY: custom_rasterizer works
 RUN python -c "import custom_rasterizer; print('custom_rasterizer: OK')"
