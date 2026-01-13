@@ -315,6 +315,12 @@ try:
     available_providers = ort.get_available_providers()
     print(f"  Available providers: {available_providers}")
 
+    # Check if TensorRT provider is available (fastest, expected in full build)
+    if 'TensorrtExecutionProvider' in available_providers:
+        print("  [OK] TensorrtExecutionProvider available")
+    else:
+        print("  [WARN] TensorrtExecutionProvider not available (will fall back to CUDA)")
+
     # Check if CUDA provider is available (expected in full build)
     if 'CUDAExecutionProvider' in available_providers:
         print("  [OK] CUDAExecutionProvider available")

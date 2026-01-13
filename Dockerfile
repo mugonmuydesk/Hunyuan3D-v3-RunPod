@@ -15,8 +15,16 @@ ENV FORCE_CUDA=1
 ENV MAX_JOBS=4
 
 # =============================================================================
-# STAGE 1: System dependencies
+# STAGE 1: System dependencies + TensorRT
 # =============================================================================
+# Add NVIDIA repo for TensorRT (must be done before apt-get update)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    gnupg \
+    && curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub | gpg --dearmor -o /usr/share/keyrings/nvidia-cuda.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64 /" > /etc/apt/sources.list.d/nvidia-cuda.list \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     git-lfs \
@@ -34,12 +42,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     ninja-build \
     software-properties-common \
+    libnvinfer10 \
+    libnvinfer-plugin10 \
+    libnvonnxparsers10 \
     && add-apt-repository ppa:deadsnakes/ppa -y \
     && add-apt-repository ppa:ubuntu-toolchain-r/test -y \
     && apt-get update \
     && apt-get install -y --no-install-recommends python3.12 python3.12-dev python3.12-venv \
     && apt-get install -y --no-install-recommends libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
+
+# VERIFY: TensorRT libraries installed
+RUN ldconfig && ldconfig -p | grep nvinfer || echo "WARN: TensorRT libs not in ldconfig"
 
 # Set Python 3.12 as default (MUST match locally-built wheel: cp312)
 # Also symlink python3-config for C extension compilation (mesh_inpaint_processor)
@@ -224,6 +238,14 @@ RUN python -m py_compile /app/handler.py && echo "handler.py: syntax OK"
 
 # VERIFY: ONNX upscaler can be imported
 RUN python -c "from onnx_upscaler import upscale_image; print('ONNX upscaler: OK')"
+
+# VERIFY: ONNX Runtime can use TensorRT provider
+RUN python -c "\
+import onnxruntime as ort; \
+providers = ort.get_available_providers(); \
+print(f'Available providers: {providers}'); \
+assert 'TensorrtExecutionProvider' in providers, 'TensorRT provider not available'; \
+print('TensorRT provider: OK')"
 
 # VERIFY: Patched image_super_utils uses ONNX upscaler (not realesrgan)
 RUN python -c "\

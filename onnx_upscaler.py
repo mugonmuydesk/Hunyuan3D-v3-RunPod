@@ -19,12 +19,12 @@ def get_onnx_session(model_path: str, use_gpu: bool = True):
 
     providers = []
     if use_gpu:
-        # Try CUDA first, fall back to CPU
+        # Try TensorRT first (fastest), then CUDA, then CPU
         available = ort.get_available_providers()
+        if 'TensorrtExecutionProvider' in available:
+            providers.append('TensorrtExecutionProvider')
         if 'CUDAExecutionProvider' in available:
             providers.append('CUDAExecutionProvider')
-        if 'TensorrtExecutionProvider' in available:
-            providers.insert(0, 'TensorrtExecutionProvider')
     providers.append('CPUExecutionProvider')
 
     session = ort.InferenceSession(model_path, providers=providers)
