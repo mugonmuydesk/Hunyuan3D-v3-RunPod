@@ -1,7 +1,7 @@
 """
 RunPod Serverless Handler for Hunyuan3D-2.1 (Image-to-3D)
 
-Version: 1.5.0 - Fixed texture generation (paint pipeline returns path, not Trimesh)
+Version: 1.6.0 - S3 upload for large outputs (bypass RunPod 20MB limit)
 
 Generates high-fidelity 3D models with PBR materials from input images.
 
@@ -14,8 +14,18 @@ API:
     - texture_resolution: Texture resolution (default: from TEXTURE_RESOLUTION env)
 
   Output:
-    - model: Base64 encoded 3D model
+    - download_url: Presigned S3 URL to download the model (valid 1 hour)
+    - s3_key: S3 object key for direct access
     - format: Output format used
+    - textured: Whether textures were generated
+    - size_mb: File size in MB
+
+Environment Variables (S3 - required):
+  - S3_BUCKET: RunPod Network Volume bucket name
+  - S3_ENDPOINT: RunPod S3 endpoint URL
+  - S3_REGION: RunPod S3 region
+  - AWS_ACCESS_KEY_ID: S3 access key
+  - AWS_SECRET_ACCESS_KEY: S3 secret key
 
 Environment Variables (VRAM Optimization):
   - MAX_NUM_VIEW: Max texture views (default: 3, lower = less VRAM)
@@ -30,7 +40,9 @@ import base64
 import tempfile
 import traceback
 import threading
+import uuid
 from pathlib import Path
+from datetime import datetime
 
 # Add Hunyuan3D paths
 sys.path.insert(0, '/app')
@@ -41,6 +53,49 @@ import runpod
 import torch
 import numpy as np
 import trimesh
+import boto3
+from botocore.config import Config as BotoConfig
+
+
+# =============================================================================
+# S3 Configuration (for large output files)
+# =============================================================================
+S3_BUCKET = os.environ.get('S3_BUCKET', 'df92r74hdc')
+S3_ENDPOINT = os.environ.get('S3_ENDPOINT', 'https://s3api-eur-is-1.runpod.io')
+S3_REGION = os.environ.get('S3_REGION', 'eur-is-1')
+
+# Global S3 client (initialized lazily)
+_s3_client = None
+
+
+def get_s3_client():
+    """Get or create S3 client."""
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client(
+            's3',
+            endpoint_url=S3_ENDPOINT,
+            region_name=S3_REGION,
+            config=BotoConfig(signature_version='s3v4')
+        )
+    return _s3_client
+
+
+def upload_to_s3(file_path: str, object_key: str) -> str:
+    """Upload file to S3 and return presigned download URL."""
+    client = get_s3_client()
+
+    # Upload the file
+    client.upload_file(file_path, S3_BUCKET, object_key)
+
+    # Generate presigned URL (valid for 1 hour)
+    presigned_url = client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': S3_BUCKET, 'Key': object_key},
+        ExpiresIn=3600
+    )
+
+    return presigned_url
 
 # =============================================================================
 # FIX: Monkey-patch torch functions to handle numpy compatibility issues
@@ -329,18 +384,31 @@ def handler(job: dict) -> dict:
             traceback.print_exc()
             return {"error": f"Failed to export mesh: {str(e)}"}
 
-        # Encode output
+        # Upload to S3
         try:
-            model_b64 = encode_file_to_base64(str(output_path))
             file_size_mb = os.path.getsize(str(output_path)) / (1024 * 1024)
-            print(f"Output encoded: {file_size_mb:.2f} MB")
+            print(f"Output size: {file_size_mb:.2f} MB")
+
+            # Generate unique object key with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            job_id = job.get("id", uuid.uuid4().hex[:8])
+            object_key = f"outputs/{timestamp}_{job_id}.{output_format}"
+
+            runpod.serverless.progress_update(job, "Uploading to S3...")
+            print(f"Uploading to S3: {object_key}")
+            download_url = upload_to_s3(str(output_path), object_key)
+            print(f"Upload complete. URL valid for 1 hour.")
+
         except Exception as e:
-            return {"error": f"Failed to encode output: {str(e)}"}
+            traceback.print_exc()
+            return {"error": f"Failed to upload to S3: {str(e)}"}
 
         return {
-            "model": model_b64,
+            "download_url": download_url,
+            "s3_key": object_key,
             "format": output_format,
-            "textured": generate_texture
+            "textured": generate_texture,
+            "size_mb": round(file_size_mb, 2)
         }
 
 
@@ -370,10 +438,15 @@ if __name__ == "__main__":
         if "error" in result:
             print(f"Error: {result['error']}")
         else:
-            print(f"Success! Format: {result['format']}, Textured: {result['textured']}")
+            print(f"Success! Format: {result['format']}, Textured: {result['textured']}, Size: {result['size_mb']} MB")
+            print(f"Download URL: {result['download_url']}")
+            print(f"S3 Key: {result['s3_key']}")
+            # Download from S3 URL
+            import requests
+            response = requests.get(result['download_url'])
             with open("test_output.glb", "wb") as f:
-                f.write(base64.b64decode(result['model']))
-            print("Saved to test_output.glb")
+                f.write(response.content)
+            print("Downloaded and saved to test_output.glb")
     else:
         # Production/API mode: RunPod serverless
         # Supports --rp_serve_api for local HTTP server

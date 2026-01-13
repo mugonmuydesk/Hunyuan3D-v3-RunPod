@@ -232,24 +232,33 @@ with tempfile.TemporaryDirectory() as mock_dir:
     mock_paint_pipeline.return_value = str(mock_textured_mesh_path)
     mock_paint_pipeline.config = mock_paint_config
 
+    # Mock S3 upload function
+    mock_s3_url = "https://s3api-eur-is-1.runpod.io/test-bucket/outputs/test.glb?signature=mock"
+
     # Mock the load_pipelines function
     with patch.object(handler, 'load_pipelines', return_value=(mock_shape_pipeline, mock_paint_pipeline)):
         # Disable progress updates (they need real runpod context)
         with patch('runpod.serverless.progress_update'):
-            result = handler.handler({
-                "input": {
-                    "image_base64": test_image,
-                    "generate_texture": True,
-                    "output_format": "glb"
-                }
-            })
+            # Mock S3 upload
+            with patch.object(handler, 'upload_to_s3', return_value=mock_s3_url):
+                result = handler.handler({
+                    "input": {
+                        "image_base64": test_image,
+                        "generate_texture": True,
+                        "output_format": "glb"
+                    }
+                })
 
     # Check result (inside the with block so temp files still exist)
     if "error" in result:
         print(f"  [FAIL] Handler error: {result['error']}")
         sys.exit(1)
+    elif "download_url" in result:
+        # New S3 response format
+        print(f"  [OK] Handler returned S3 URL, format={result['format']}, textured={result['textured']}, size={result['size_mb']}MB")
+        print(f"       S3 key: {result['s3_key']}")
     elif "model" in result:
-        # Decode and verify
+        # Legacy base64 response (for backwards compatibility)
         decoded = base64.b64decode(result["model"])
         print(f"  [OK] Handler returned {len(decoded)} bytes, format={result['format']}, textured={result['textured']}")
     else:
