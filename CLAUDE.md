@@ -5,7 +5,7 @@
 RunPod serverless endpoint for Tencent's Hunyuan3D-2.1 image-to-3D generation with PBR textures.
 
 - **Endpoint ID**: `hjeptaeuf9o5kj`
-- **Docker Image**: `mugonmuydesk/hunyuan3d-v3:latest`
+- **GitHub Repo**: `mugonmuydesk/Hunyuan3D-v3-RunPod`
 - **Current Version**: v1.4.1
 - **GPU Requirements**: 24GB minimum, 48GB recommended
 
@@ -45,12 +45,18 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
+Build locally first:
+```bash
+cd ~/hunyuan3d-v3-runpod
+docker build -t hunyuan3d-v3:local .
+```
+
 Run locally (48GB GPU - max quality):
 ```bash
 docker run --gpus all -p 8000:8000 \
   -e MAX_NUM_VIEW=6 \
   -e TEXTURE_RESOLUTION=512 \
-  mugonmuydesk/hunyuan3d-v3:latest python -u handler.py --rp_serve_api --rp_api_host 0.0.0.0
+  hunyuan3d-v3:local python -u handler.py --rp_serve_api --rp_api_host 0.0.0.0
 ```
 
 Run locally (24GB GPU - optimized):
@@ -59,7 +65,7 @@ docker run --gpus all -p 8000:8000 \
   -e ENABLE_CACHE_CLEARING=1 \
   -e MAX_NUM_VIEW=3 \
   -e TEXTURE_RESOLUTION=128 \
-  mugonmuydesk/hunyuan3d-v3:latest python -u handler.py --rp_serve_api --rp_api_host 0.0.0.0
+  hunyuan3d-v3:local python -u handler.py --rp_serve_api --rp_api_host 0.0.0.0
 ```
 
 Test request:
