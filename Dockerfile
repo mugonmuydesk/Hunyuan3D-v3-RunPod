@@ -138,12 +138,12 @@ RUN python -c "import trimesh; print(f'trimesh {trimesh.__version__}')"
 RUN python -c "import torch; assert torch.__version__.startswith('2.5'), f'PyTorch was overwritten to {torch.__version__}'"
 
 # =============================================================================
-# STAGE 5: Custom rasterizer (locally-built wheel for PyTorch 2.5.1+cu121, Python 3.12)
+# STAGE 5: Custom rasterizer (build from source for all CUDA architectures)
 # =============================================================================
-# HuggingFace wheel has ABI mismatch - using locally-built wheel instead
-COPY custom_rasterizer-0.1-cp312-cp312-linux_x86_64.whl /tmp/
-RUN pip install --no-cache-dir /tmp/custom_rasterizer-0.1-cp312-cp312-linux_x86_64.whl && \
-    rm /tmp/custom_rasterizer-0.1-cp312-cp312-linux_x86_64.whl
+# Build from source to ensure compatibility with all GPUs in TORCH_CUDA_ARCH_LIST
+# This takes ~5-10 minutes but ensures A40, L40, A100, H100 all work
+WORKDIR /app/hy3dpaint/custom_rasterizer
+RUN pip install --no-cache-dir -e .
 
 # VERIFY: custom_rasterizer works
 RUN python -c "import custom_rasterizer; print('custom_rasterizer: OK')"
