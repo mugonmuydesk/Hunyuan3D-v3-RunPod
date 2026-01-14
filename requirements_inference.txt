@@ -32,6 +32,7 @@ einops==0.8.0
 pandas==2.2.2
 
 # Computer Vision & Image Processing
+Pillow>=9.0.0
 opencv-python==4.10.0.84
 imageio==2.36.0
 scikit-image==0.24.0

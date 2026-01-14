@@ -1,7 +1,7 @@
 """
 RunPod Serverless Handler for Hunyuan3D-2.1 (Image-to-3D)
 
-Version: 1.6.0 - S3 upload for large outputs (bypass RunPod 20MB limit)
+Version: 1.8.0 - Full PBR export using pygltflib (matches official HuggingFace pipeline)
 
 Generates high-fidelity 3D models with PBR materials from input images.
 
@@ -41,6 +41,7 @@ import tempfile
 import traceback
 import threading
 import uuid
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -55,6 +56,8 @@ import numpy as np
 import trimesh
 import boto3
 from botocore.config import Config as BotoConfig
+import pygltflib
+from PIL import Image
 
 
 # =============================================================================
@@ -96,6 +99,196 @@ def upload_to_s3(file_path: str, object_key: str) -> str:
     )
 
     return presigned_url
+
+
+# =============================================================================
+# PBR GLB Creation (matches official HuggingFace pipeline)
+# =============================================================================
+
+def combine_metallic_roughness(metallic_path: str, roughness_path: str, output_path: str):
+    """
+    Combine metallic and roughness into a single texture for glTF.
+    glTF standard: R=unused, G=roughness, B=metallic, A=unused
+    """
+    metallic_img = Image.open(metallic_path).convert('L')  # Grayscale
+    roughness_img = Image.open(roughness_path).convert('L')  # Grayscale
+
+    # Ensure same size
+    if metallic_img.size != roughness_img.size:
+        roughness_img = roughness_img.resize(metallic_img.size, Image.LANCZOS)
+
+    # Create combined image: R=0, G=roughness, B=metallic
+    width, height = metallic_img.size
+    combined = Image.new('RGB', (width, height))
+
+    metallic_data = np.array(metallic_img)
+    roughness_data = np.array(roughness_img)
+
+    # glTF: Green channel = roughness, Blue channel = metallic
+    combined_data = np.zeros((height, width, 3), dtype=np.uint8)
+    combined_data[:, :, 1] = roughness_data  # G = roughness
+    combined_data[:, :, 2] = metallic_data   # B = metallic
+
+    combined = Image.fromarray(combined_data)
+    combined.save(output_path)
+    return output_path
+
+
+def create_glb_with_pbr_materials(obj_path: str, output_path: str):
+    """
+    Create GLB with proper PBR materials from OBJ + texture files.
+
+    Expects texture files alongside OBJ:
+    - {name}.jpg - albedo/diffuse
+    - {name}_metallic.jpg - metallic map
+    - {name}_roughness.jpg - roughness map
+    - {name}_normal.jpg - normal map (optional)
+    """
+    import io
+
+    base_path = os.path.splitext(obj_path)[0]
+
+    # Find texture files
+    textures = {}
+    for suffix, key in [('', 'albedo'), ('_metallic', 'metallic'),
+                        ('_roughness', 'roughness'), ('_normal', 'normal')]:
+        for ext in ['.jpg', '.png']:
+            tex_path = f"{base_path}{suffix}{ext}"
+            if os.path.exists(tex_path):
+                textures[key] = tex_path
+                break
+
+    print(f"Found textures: {list(textures.keys())}")
+
+    # Load OBJ and export to temp GLB
+    mesh = trimesh.load(obj_path)
+    temp_glb = obj_path.replace('.obj', '_temp.glb')
+    mesh.export(temp_glb)
+
+    # Load GLB with pygltflib for material editing
+    gltf = pygltflib.GLTF2().load(temp_glb)
+
+    # Combine metallic + roughness if both exist
+    if 'metallic' in textures and 'roughness' in textures:
+        mr_path = f"{base_path}_metallic_roughness.png"
+        combine_metallic_roughness(textures['metallic'], textures['roughness'], mr_path)
+        textures['metallicRoughness'] = mr_path
+        print(f"Combined metallic+roughness into: {mr_path}")
+
+    # Helper to read image as bytes
+    def read_image_bytes(path):
+        with open(path, 'rb') as f:
+            return f.read()
+
+    # Build new images and textures lists
+    new_images = []
+    new_textures = []
+    texture_indices = {}
+
+    # Add albedo texture
+    if 'albedo' in textures:
+        img_data = read_image_bytes(textures['albedo'])
+        # Determine mime type
+        mime = 'image/jpeg' if textures['albedo'].endswith('.jpg') else 'image/png'
+
+        # Add to buffer
+        buffer_view_index = len(gltf.bufferViews)
+        buffer_data = gltf.binary_blob() or b''
+        new_buffer_data = buffer_data + img_data
+
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0,
+            byteOffset=len(buffer_data),
+            byteLength=len(img_data)
+        ))
+        gltf.buffers[0].byteLength = len(new_buffer_data)
+        gltf.set_binary_blob(new_buffer_data)
+
+        new_images.append(pygltflib.Image(bufferView=buffer_view_index, mimeType=mime))
+        new_textures.append(pygltflib.Texture(source=len(new_images) - 1))
+        texture_indices['albedo'] = len(new_textures) - 1
+
+    # Add metallic-roughness combined texture
+    if 'metallicRoughness' in textures:
+        img_data = read_image_bytes(textures['metallicRoughness'])
+
+        buffer_view_index = len(gltf.bufferViews)
+        buffer_data = gltf.binary_blob() or b''
+        new_buffer_data = buffer_data + img_data
+
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0,
+            byteOffset=len(buffer_data),
+            byteLength=len(img_data)
+        ))
+        gltf.buffers[0].byteLength = len(new_buffer_data)
+        gltf.set_binary_blob(new_buffer_data)
+
+        new_images.append(pygltflib.Image(bufferView=buffer_view_index, mimeType='image/png'))
+        new_textures.append(pygltflib.Texture(source=len(new_images) - 1))
+        texture_indices['metallicRoughness'] = len(new_textures) - 1
+
+    # Add normal texture
+    if 'normal' in textures:
+        img_data = read_image_bytes(textures['normal'])
+        mime = 'image/jpeg' if textures['normal'].endswith('.jpg') else 'image/png'
+
+        buffer_view_index = len(gltf.bufferViews)
+        buffer_data = gltf.binary_blob() or b''
+        new_buffer_data = buffer_data + img_data
+
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0,
+            byteOffset=len(buffer_data),
+            byteLength=len(img_data)
+        ))
+        gltf.buffers[0].byteLength = len(new_buffer_data)
+        gltf.set_binary_blob(new_buffer_data)
+
+        new_images.append(pygltflib.Image(bufferView=buffer_view_index, mimeType=mime))
+        new_textures.append(pygltflib.Texture(source=len(new_images) - 1))
+        texture_indices['normal'] = len(new_textures) - 1
+
+    # Update GLTF structure
+    gltf.images = new_images
+    gltf.textures = new_textures
+
+    # Create PBR material
+    pbr = pygltflib.PbrMetallicRoughness(
+        baseColorFactor=[1.0, 1.0, 1.0, 1.0],
+        metallicFactor=1.0,
+        roughnessFactor=1.0
+    )
+
+    if 'albedo' in texture_indices:
+        pbr.baseColorTexture = pygltflib.TextureInfo(index=texture_indices['albedo'])
+
+    if 'metallicRoughness' in texture_indices:
+        pbr.metallicRoughnessTexture = pygltflib.TextureInfo(index=texture_indices['metallicRoughness'])
+
+    material = pygltflib.Material(name="PBR_Material", pbrMetallicRoughness=pbr)
+
+    if 'normal' in texture_indices:
+        material.normalTexture = pygltflib.NormalTextureInfo(index=texture_indices['normal'])
+
+    gltf.materials = [material]
+
+    # Assign material to mesh primitives
+    if gltf.meshes:
+        for mesh_obj in gltf.meshes:
+            for primitive in mesh_obj.primitives:
+                primitive.material = 0
+
+    # Save final GLB
+    gltf.save(output_path)
+
+    # Cleanup temp file
+    if os.path.exists(temp_glb):
+        os.remove(temp_glb)
+
+    print(f"Created PBR GLB: {output_path}")
+    return output_path
+
 
 # =============================================================================
 # FIX: Monkey-patch torch functions to handle numpy compatibility issues
@@ -357,12 +550,14 @@ def handler(job: dict) -> dict:
                 paint_pipe.config.max_num_view = num_views
                 paint_pipe.config.resolution = texture_resolution
 
-                # Paint pipeline returns file path string, not Trimesh object
+                # Paint pipeline returns OBJ file path, but also creates GLB via Blender
+                # The GLB has full PBR textures (metallic, roughness, normal maps)
                 output_mesh_path = paint_pipe(str(untextured_mesh_path), image_path=str(image_path))
                 print(f"Texture generation complete: {output_mesh_path}")
 
-                # Load the textured mesh from the output path
-                mesh = trimesh.load(output_mesh_path)
+                # Store the OBJ path for PBR GLB creation
+                textured_obj_path = output_mesh_path
+
                 if should_clear_cache():
                     torch.cuda.empty_cache()
             except Exception as e:
@@ -370,16 +565,42 @@ def handler(job: dict) -> dict:
                     torch.cuda.empty_cache()
                 traceback.print_exc()
                 return {"error": f"Texture generation failed: {str(e)}"}
+        else:
+            textured_obj_path = None
 
         runpod.serverless.progress_update(job, "Exporting mesh...")
         # Export mesh
         output_path = temp_path / f"output.{output_format}"
         try:
-            if output_format == "glb":
+            if output_format == "glb" and generate_texture and textured_obj_path:
+                # Create GLB with full PBR materials (like official HuggingFace pipeline)
+                create_glb_with_pbr_materials(textured_obj_path, str(output_path))
+                print(f"Created PBR GLB: {output_path}")
+            elif output_format == "glb":
+                # No texture - just export untextured mesh
                 mesh.export(str(output_path))
+                print(f"Exported untextured GLB via trimesh: {output_path}")
             else:
-                mesh.export(str(output_path), file_type='obj')
-            print(f"Exported to {output_format.upper()}: {output_path}")
+                # OBJ format - copy the OBJ and related texture files
+                if generate_texture and textured_obj_path:
+                    # Copy OBJ and all associated files (MTL, textures)
+                    base_name = os.path.splitext(textured_obj_path)[0]
+                    shutil.copy(textured_obj_path, str(output_path))
+                    # Copy MTL file
+                    mtl_src = f"{base_name}.mtl"
+                    if os.path.exists(mtl_src):
+                        shutil.copy(mtl_src, str(output_path.with_suffix('.mtl')))
+                    # Copy texture files
+                    for suffix in ['', '_metallic', '_roughness', '_normal']:
+                        for ext in ['.jpg', '.png']:
+                            tex_src = f"{base_name}{suffix}{ext}"
+                            if os.path.exists(tex_src):
+                                tex_dst = temp_path / f"output{suffix}{ext}"
+                                shutil.copy(tex_src, str(tex_dst))
+                    print(f"Copied OBJ with PBR textures: {output_path}")
+                else:
+                    mesh.export(str(output_path), file_type='obj')
+                    print(f"Exported via trimesh: {output_path}")
         except Exception as e:
             traceback.print_exc()
             return {"error": f"Failed to export mesh: {str(e)}"}
